@@ -1,0 +1,48 @@
+# Publishes this package to the GitHub npm registry (npm.pkg.github.com).
+#
+# Prerequisite: the npm scope in package.json ("@agentledger") must match the
+# GitHub owner of this repository (org or user). Example: repo
+# github.com/agentledger/agent-ledger-sdk can publish @agentledger/sdk. A fork
+# under another account cannot publish that scope to GitHub Packages.
+#
+# Trigger: GitHub Releases — create a release and publish it. Use a tag that
+# matches package.json (e.g. tag v0.1.0 when version is 0.1.0).
+
+name: Publish GitHub Packages
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          registry-url: https://npm.pkg.github.com
+          scope: '@agentledger'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+        env:
+          CI: true
+
+      - name: Publish to GitHub Packages
+        run: npm publish
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
