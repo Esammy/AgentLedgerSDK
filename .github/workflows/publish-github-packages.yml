@@ -1,8 +1,8 @@
 # Publishes this package to the GitHub npm registry (npm.pkg.github.com).
 #
-# Prerequisite: the npm scope in package.json ("@agentledger") must match the
+# Prerequisite: the npm scope in package.json ("@ai-agent-ledger") must match the
 # GitHub owner of this repository (org or user). Example: repo
-# github.com/agentledger/agent-ledger-sdk can publish @agentledger/sdk. A fork
+# github.com/ai-agent-ledger/agent-ledger-sdk can publish @ai-agent-ledger/sdk. A fork
 # under another account cannot publish that scope to GitHub Packages.
 #
 # Trigger: GitHub Releases — create a release and publish it. Use a tag that
@@ -29,7 +29,7 @@ jobs:
           node-version: '20'
           cache: npm
           registry-url: https://npm.pkg.github.com
-          scope: '@agentledger'
+          scope: '@ai-agent-ledger'
 
       - name: Install dependencies
         run: npm ci

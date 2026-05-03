@@ -4,12 +4,12 @@
   "description": "Runtime observability, policy enforcement, and audit trails for AI agents",
   "repository": {
     "type": "git",
-    "url": "https://github.com/agentledger/agent-ledger-sdk.git"
+    "url": "https://github.com/Esammy/AgentLedgerSDK.git"
   },
   "bugs": {
-    "url": "https://github.com/agentledger/agent-ledger-sdk/issues"
+    "url": "https://github.com/Esammy/AgentLedgerSDK/issues"
   },
-  "homepage": "https://github.com/agentledger/agent-ledger-sdk#readme",
+  "homepage": "https://github.com/Esammy/AgentLedgerSDK#readme",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
