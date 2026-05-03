@@ -7,13 +7,12 @@
  *   await server.listen({ port: 4000 })
  */
 
+import http from 'node:http'
+import { WebSocketServer } from 'ws'
 import type { AgentLedger } from '../ledger/ledger'
 
 export function createDashboardServer(ledger: AgentLedger) {
-  const http = require('http') as typeof import('http')
-  const { WebSocketServer } = require('ws') as typeof import('ws')
-
-  const httpServer = http.createServer(async (req: import('http').IncomingMessage, res: import('http').ServerResponse) => {
+  const httpServer = http.createServer(async (req: http.IncomingMessage, res: http.ServerResponse) => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host}`)
     const parts = url.pathname.split('/').filter(Boolean)
 
@@ -120,7 +119,7 @@ export function createDashboardServer(ledger: AgentLedger) {
   }
 }
 
-function readBody(req: import('http').IncomingMessage): Promise<Record<string, unknown>> {
+function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise(resolve => {
     let body = ''
     req.on('data', chunk => (body += chunk))
