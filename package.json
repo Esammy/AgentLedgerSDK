@@ -1,6 +1,6 @@
 {
   "name": "@ai-agent-ledger/sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Runtime observability, policy enforcement, and audit trails for AI agents",
   "repository": {
     "type": "git",

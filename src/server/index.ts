@@ -2,7 +2,7 @@
  * Dashboard server — optional HTTP + WebSocket server.
  *
  * Usage:
- *   import { createDashboardServer } from '@agentledger/sdk/server'
+ *   import { createDashboardServer } from '@ai-agent-ledger/sdk/server'
  *   const server = createDashboardServer(ledger)
  *   await server.listen({ port: 4000 })
  */

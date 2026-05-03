@@ -53,7 +53,7 @@ const agent = ledger.wrap(myExistingAgent)
 
 ## 🧠 Enterprise Policy Engine (Coming Soon)
 
-AgentLedger uses an Open-Core model. The MIT SDK provides the foundational execution engine, while advanced features live in the upcoming `@agentledger/policy-engine` enterprise package:
+AgentLedger uses an Open-Core model. The MIT SDK provides the foundational execution engine, while advanced features live in the upcoming `@ai-agent-ledger/policy-engine` enterprise package:
 
 *   **Natural Language Compilers:** Translate plain English ("Never allow querying production databases with a LIMIT greater than 1000") directly into deterministic AST rules using Claude, Gemini, or OpenAI.
 *   **Approval Gate Workflows:** Native integration with Slack, Microsoft Teams, and PagerDuty for human-in-the-loop approvals.
@@ -76,7 +76,7 @@ await ledger.run(async () => {
 
 ---
 
-## 📊 Trust Dashboard (`@agentledger/sdk/server`)
+## 📊 Trust Dashboard (`@ai-agent-ledger/sdk/server`)
 
 AgentLedger includes an optional Fastify-based server to power a live trust dashboard, handle human approvals, and export SOC2-ready audit reports.
 
@@ -99,4 +99,4 @@ await server.listen({ port: 4000 })
 
 ## 📄 License
 
-MIT © [AgentLedger](https://github.com/agentledger)
+MIT © [AgentLedger](https://github.com/Esammy/AgentLedgerSDK)

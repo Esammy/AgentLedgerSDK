@@ -159,7 +159,7 @@ export class LedgerStorage {
         this.adapter = new MemoryAdapter()
         break
       case 's3':
-        throw new Error('S3Adapter: install @agentledger/s3 for S3 support')
+        throw new Error('S3Adapter: install @ai-agent-ledger/s3 for S3 support')
       default:
         throw new Error(`Unknown storage type: ${(config as { type?: string }).type}`)
     }
