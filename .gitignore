@@ -8,3 +8,4 @@ dist/
 rough.md
 *.ndjson
 *.log
+.cursor

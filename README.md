@@ -43,9 +43,9 @@ const agent = ledger.wrap(myExistingAgent)
 
 ## ✨ Key Features
 
-*   **🛡️ Policy Enforcement:** Enforce natural language or template-based policies at the tool-call level (Block, Alert, or Approve-Gate).
+*   **🛡️ Policy Enforcement:** Enforce deterministic, rule-based policies at the tool-call level (Block or Approve-Gate).
 *   **⛓️ Tamper-Evident Ledger:** Every event is part of a SHA-256 hash chain. Any retroactive modification to the audit log invalidates the subsequent hashes.
-*   **🛑 Kill Switch:** Programmatically halt agent execution across all or specific runs in `< 50ms`.
+*   **🛑 Kill Switch:** Programmatically halt agent execution across all or specific runs. The kill switch is checked synchronously *before* the next tool invocation begins.
 *   **🔍 Risk Scoring:** Automated 0-100 risk scoring based on tool names, arguments (PII/Credentials detection), and outputs.
 *   **🤖 Framework Agnostic:** Works with LangChain, CrewAI, Anthropic API, or your own custom agent logic.
 
@@ -63,11 +63,12 @@ AgentLedger uses an Open-Core model. The MIT SDK provides the foundational execu
 
 ---
 
-## 🧵 Thread-Safe Concurrency
+## 🧵 Request-Scoped Concurrency
 
-In multi-user server environments (e.g., Fastify or Express), use `ledger.run()` to isolate audit trails and prevent state leakage between concurrent agent invocations.
+In multi-user server environments (e.g., Fastify or Express), use `ledger.run()` to isolate audit trails via `AsyncLocalStorage`, preventing `run_id` state leakage between concurrent async requests in a single Node.js process.
 
 ```typescript
+// Returns a Promise when the callback is async — be sure to await it
 await ledger.run(async () => {
   // All tool calls inside this block share a unique run_id
   await agent.invoke({ input: "Pay invoice #123" })
@@ -78,7 +79,7 @@ await ledger.run(async () => {
 
 ## 📊 Trust Dashboard (`@ai-agent-ledger/sdk/server`)
 
-AgentLedger includes an optional Fastify-based server to power a live trust dashboard, handle human approvals, and export SOC2-ready audit reports.
+AgentLedger includes an optional lightweight Node `http` server to power a live trust dashboard, handle human approvals, and export audit reports.
 
 ```typescript
 import { createDashboardServer } from '@ai-agent-ledger/sdk/server'
@@ -95,7 +96,7 @@ await server.listen({ port: 4000 })
 *   `src/interceptor`: Zero-overhead tool and LLM wrapping.
 *   `src/policy`: Deterministic policy engine execution and templates.
 *   `src/risk`: Heuristic risk scoring and PII detection.
-*   `src/storage`: Pluggable adapters (File, S3, Cloud, Memory).
+*   `src/storage`: Pluggable adapters (File, Memory, Cloud. Note: S3 requires the separate `@ai-agent-ledger/s3` package).
 
 ## 📄 License
 
