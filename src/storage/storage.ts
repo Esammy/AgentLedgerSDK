@@ -1,6 +1,6 @@
-import { createHash } from 'crypto'
 import { appendFile, readFile } from 'fs/promises'
 import type { LedgerEntry } from '../ledger/types'
+import { computeEntryId } from '../ledger/hash'
 
 export interface EntryFilter {
   run_id?: string
@@ -28,11 +28,15 @@ export function verifyChain(entries: LedgerEntry[]): ChainVerification {
   let valid = true
   let broken_at: number | null = null
 
-  for (let i = 1; i < entries.length; i++) {
-    const expected = createHash('sha256')
-      .update(entries[i - 1].id + JSON.stringify(entries[i].payload))
-      .digest('hex')
-    if (expected !== entries[i].id) {
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i]
+    // Re-derive the id from every other field. If anyone tampered with ts,
+    // run_id, agent_id, type, payload, risk_score, OR prev_id, the hash
+    // breaks here.
+    const { id, human_summary, ...rest } = e
+    void human_summary
+    const expected = computeEntryId(rest)
+    if (expected !== id) {
       valid = false
       broken_at = i
       break
@@ -40,6 +44,18 @@ export function verifyChain(entries: LedgerEntry[]): ChainVerification {
   }
 
   return { valid, broken_at, entry_count: entries.length, verified_at: Date.now() }
+}
+
+function applyFilter(entries: LedgerEntry[], filter: EntryFilter): LedgerEntry[] {
+  return entries.filter(e => {
+    if (filter.run_id && e.run_id !== filter.run_id) return false
+    if (filter.agent_id && e.agent_id !== filter.agent_id) return false
+    if (filter.type && e.type !== filter.type) return false
+    if (filter.since && e.ts < filter.since) return false
+    if (filter.until && e.ts > filter.until) return false
+    if (filter.min_risk !== undefined && e.risk_score < filter.min_risk) return false
+    return true
+  })
 }
 
 export abstract class StorageAdapter {
@@ -59,15 +75,7 @@ export class MemoryAdapter extends StorageAdapter {
   }
 
   async query(filter: EntryFilter): Promise<LedgerEntry[]> {
-    return this.entries.filter(e => {
-      if (filter.run_id && e.run_id !== filter.run_id) return false
-      if (filter.agent_id && e.agent_id !== filter.agent_id) return false
-      if (filter.type && e.type !== filter.type) return false
-      if (filter.since && e.ts < filter.since) return false
-      if (filter.until && e.ts > filter.until) return false
-      if (filter.min_risk && e.risk_score < filter.min_risk) return false
-      return true
-    })
+    return applyFilter(this.entries, filter)
   }
 }
 
@@ -92,15 +100,7 @@ export class FileAdapter extends StorageAdapter {
       .split('\n')
       .filter(Boolean)
       .map(l => JSON.parse(l) as LedgerEntry)
-    return entries.filter(e => {
-      if (filter.run_id && e.run_id !== filter.run_id) return false
-      if (filter.agent_id && e.agent_id !== filter.agent_id) return false
-      if (filter.type && e.type !== filter.type) return false
-      if (filter.since && e.ts < filter.since) return false
-      if (filter.until && e.ts > filter.until) return false
-      if (filter.min_risk && e.risk_score < filter.min_risk) return false
-      return true
-    })
+    return applyFilter(entries, filter)
   }
 }
 
@@ -136,11 +136,22 @@ export class CloudAdapter extends StorageAdapter {
     }
   }
 
-  async query(_filter: EntryFilter): Promise<LedgerEntry[]> {
-    const res = await fetch('https://api.agentledger.io/v1/entries', {
+  async query(filter: EntryFilter): Promise<LedgerEntry[]> {
+    const params = new URLSearchParams()
+    if (filter.run_id) params.set('run_id', filter.run_id)
+    if (filter.agent_id) params.set('agent_id', filter.agent_id)
+    if (filter.type) params.set('type', filter.type)
+    if (filter.since !== undefined) params.set('since', String(filter.since))
+    if (filter.until !== undefined) params.set('until', String(filter.until))
+    if (filter.min_risk !== undefined) params.set('min_risk', String(filter.min_risk))
+    const qs = params.toString()
+    const url = `https://api.agentledger.io/v1/entries${qs ? `?${qs}` : ''}`
+    const res = await fetch(url, {
       headers: { Authorization: `Bearer ${this.apiKey}` },
     })
-    return res.json() as Promise<LedgerEntry[]>
+    const remote = (await res.json()) as LedgerEntry[]
+    // Defensive client-side filter in case the server doesn't honor params.
+    return applyFilter(remote, filter)
   }
 }
 

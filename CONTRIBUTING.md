@@ -63,7 +63,7 @@ All tests in `tests/` use [Vitest](https://vitest.dev/). The core test suite run
 ## Code Style
 
 - **TypeScript strict mode** is on (`strict: true` in `tsconfig.json`). No `any` without a comment explaining why.
-- **No external runtime dependencies** — the OSS core has zero production dependencies. Keeping it this way is a deliberate design goal.
+- **Minimal runtime dependencies** — the OSS SDK keeps a small surface area. The published package includes **`ws`** for the optional WebSocket live stream in `createDashboardServer` (`@ai-agent-ledger/sdk/server`). Avoid adding new runtime dependencies without a maintainer discussion.
 - **Fail-open by design** — if AgentLedger itself throws, the agent should continue (unobserved) rather than crash. Don't break this invariant.
 - Prefer `const` over `let`. Use `unknown` over `any`. Use type guards over casts.
 - New files should export exactly what they need — avoid barrel re-exports that pull in compiler internals.

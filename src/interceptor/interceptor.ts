@@ -11,6 +11,12 @@ interface GateResolution {
   denied_by?: string
 }
 
+const WRAPPED_MARKER = '__agentledger_wrapped'
+
+type WrappedFunc = ((...args: unknown[]) => Promise<unknown>) & {
+  [WRAPPED_MARKER]?: true
+}
+
 export class Interceptor {
   private halted = new Set<string>()
   private scorer = new RiskScorer()
@@ -23,16 +29,25 @@ export class Interceptor {
       agent.tools = agent.tools.map(tool => this.wrapTool(tool, agent.id!))
     }
     if (agent.llm?.invoke) {
-      agent.llm.invoke = this.wrapLLMCall(agent.llm.invoke.bind(agent.llm), agent.id!)
+      const existing = agent.llm.invoke as WrappedFunc
+      if (!existing[WRAPPED_MARKER]) {
+        agent.llm.invoke = this.wrapLLMCall(agent.llm.invoke.bind(agent.llm), agent.id!)
+      }
     }
     return agent
   }
 
   private wrapTool(tool: Tool, agentId: string): Tool {
+    // Idempotency: re-wrapping a tool that's already governed is a no-op,
+    // so calling ledger.wrap(agent) twice doesn't double-record or
+    // double-evaluate policies.
+    const existing = tool.func as WrappedFunc
+    if (existing[WRAPPED_MARKER]) return tool
+
     const originalFunc = tool.func
     const interceptor = this
 
-    const wrapped = async (...args: unknown[]): Promise<unknown> => {
+    const wrapped: WrappedFunc = async (...args: unknown[]): Promise<unknown> => {
       const runId = ledgerContext.getStore()?.run_id ?? randomUUID()
 
       if (interceptor.halted.has('__all__') || interceptor.halted.has(runId)) {
@@ -47,19 +62,23 @@ export class Interceptor {
       })
 
       if (decision.action === 'block') {
-        await interceptor.ledger.record({
-          agent_id: agentId,
-          run_id: runId,
-          ts: Date.now(),
-          type: 'policy_block',
-          risk_score: 100,
-          payload: {
-            policy_id: decision.policy_id!,
-            policy_text: decision.reason,
-            blocked_action: `${tool.name}(${JSON.stringify(args).slice(0, 200)})`,
-            escalated_to: decision.escalate_to,
-          },
-        })
+        try {
+          await interceptor.ledger.record({
+            agent_id: agentId,
+            run_id: runId,
+            ts: Date.now(),
+            type: 'policy_block',
+            risk_score: 100,
+            payload: {
+              policy_id: decision.policy_id!,
+              policy_text: decision.reason,
+              blocked_action: `${tool.name}(${JSON.stringify(args).slice(0, 200)})`,
+              escalated_to: decision.escalate_to,
+            },
+          })
+        } catch (err) {
+          interceptor.ledger.emit('storage_error', err)
+        }
         if (decision.escalate_to?.length) {
           await interceptor.escalate(decision, tool.name, args)
         }
@@ -68,23 +87,46 @@ export class Interceptor {
 
       if (decision.action === 'approve_gate') {
         const token = randomUUID()
-        await interceptor.ledger.record({
-          agent_id: agentId,
-          run_id: runId,
-          ts: Date.now(),
-          type: 'approval_gate',
-          risk_score: 75,
-          payload: {
-            policy_id: decision.policy_id!,
-            policy_text: decision.reason,
-            blocked_action: `${tool.name}(${JSON.stringify(args).slice(0, 200)})`,
-            escalated_to: decision.escalate_to,
-            override_token: token,
-          },
-        })
+        try {
+          await interceptor.ledger.record({
+            agent_id: agentId,
+            run_id: runId,
+            ts: Date.now(),
+            type: 'approval_gate',
+            risk_score: 75,
+            payload: {
+              policy_id: decision.policy_id!,
+              policy_text: decision.reason,
+              blocked_action: `${tool.name}(${JSON.stringify(args).slice(0, 200)})`,
+              escalated_to: decision.escalate_to,
+              override_token: token,
+            },
+          })
+        } catch (err) {
+          interceptor.ledger.emit('storage_error', err)
+        }
         const resolution = await interceptor.waitForApproval(token, decision)
         if (!resolution.approved) {
           throw new ApprovalDeniedError(`Gate denied by ${resolution.denied_by}`)
+        }
+      }
+
+      // `alert` and `log_only` do not block the call. We emit an `alert`
+      // event so dashboards can surface them, and let the tool run as
+      // normal — the regular tool_call entry below is the audit record.
+      if (decision.action === 'alert' || decision.action === 'log_only') {
+        interceptor.ledger.emit('alert', {
+          policy_id: decision.policy_id,
+          reason: decision.reason,
+          tool: tool.name,
+          args_preview: JSON.stringify(args).slice(0, 300),
+          escalate_to: decision.escalate_to,
+          run_id: runId,
+          agent_id: agentId,
+          ts: Date.now(),
+        })
+        if (decision.escalate_to?.length) {
+          await interceptor.escalate(decision, tool.name, args)
         }
       }
 
@@ -103,7 +145,7 @@ export class Interceptor {
         try {
           riskScore = interceptor.scorer.score(tool.name, args, output)
           dataClassifications = interceptor.scorer.classifyData(args, output)
-        } catch (e) {
+        } catch {
           // Ignore scorer errors to prevent crashing the finally block
         }
 
@@ -130,15 +172,22 @@ export class Interceptor {
       return output
     }
 
+    Object.defineProperty(wrapped, WRAPPED_MARKER, {
+      value: true,
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    })
+
     return { ...tool, func: wrapped }
   }
 
   private wrapLLMCall(
     originalInvoke: (...args: unknown[]) => Promise<unknown>,
     agentId: string
-  ) {
+  ): WrappedFunc {
     const interceptor = this
-    return async (...args: unknown[]): Promise<unknown> => {
+    const wrapped: WrappedFunc = async (...args: unknown[]): Promise<unknown> => {
       const start = Date.now()
       const result = await originalInvoke(...args)
       interceptor.ledger
@@ -161,6 +210,13 @@ export class Interceptor {
         .catch(() => {})
       return result
     }
+    Object.defineProperty(wrapped, WRAPPED_MARKER, {
+      value: true,
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    })
+    return wrapped
   }
 
   private async waitForApproval(
@@ -171,13 +227,20 @@ export class Interceptor {
       await this.escalate(decision, 'approval_gate', [], token)
     }
     return new Promise(resolve => {
-      this.pendingGates.set(token, resolve)
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         if (this.pendingGates.has(token)) {
           this.pendingGates.delete(token)
           resolve({ approved: false, denied_by: 'timeout' })
         }
       }, 30 * 60 * 1000)
+      // Don't keep the event loop alive for half an hour just to wait on
+      // a gate — let the process exit naturally if everything else is done.
+      if (typeof timer.unref === 'function') timer.unref()
+
+      this.pendingGates.set(token, resolution => {
+        clearTimeout(timer)
+        resolve(resolution)
+      })
     })
   }
 

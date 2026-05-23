@@ -9,9 +9,9 @@
 
 ---
 
-<!-- Replace this line with your demo.gif once recorded -->
-> 🎬 **[Demo GIF coming soon]** — See a policy block and kill switch fire in real-time.
-<!-- <img src="./demo.gif" alt="AgentLedger demo: policy block and kill switch in action" width="800" /> -->
+Record a **GIF** from the scripted demo in [`examples/demo_recording.ts`](./examples/demo_recording.ts): run `npm run demo:record` (add pauses with `DEMO_PAUSE_SEC=1.2` on macOS/Linux, or `$env:DEMO_PAUSE_SEC='1.2'` in PowerShell), capture the terminal (OBS or Windows Game Bar), then convert with `ffmpeg` — see comments at the top of that file. Save the result as `./demo.gif` and uncomment the image line below.
+
+<!-- <img src="./demo.gif" alt="AgentLedger demo: policy block, audit chain, kill switch" width="820" /> -->
 
 ---
 
@@ -32,9 +32,13 @@ const agent = ledger.wrap(myExistingAgent) // every tool call is now governed
 
 ## Why this exists
 
-We were running an AI agent in a payment workflow. One night, the agent queued 47 payment transactions totalling $230,000 — none of them were authorised. By the time we noticed, 12 had already executed. We had no kill switch. No audit trail. No way to know *why* it happened.
+Here is the scenario that made this necessary:
 
-We looked for a middleware layer we could drop in front of any agent framework — something that would intercept tool calls before they execute, enforce policies, write a tamper-evident log, and give us a kill switch we could hit from anywhere. It didn't exist. So we built it.
+An AI agent, running unsupervised in a payment workflow, queued 47 transactions totalling $230,000 — none of them authorized. By the time anyone caught it, 12 had already executed. There was no kill switch. No audit trail. No way to explain to a board what the agent had been doing, or why it could not be stopped.
+
+This is the pattern we kept hearing across AI engineering teams trying to ship to production. The agent works. It passes every test. Then it hits a real environment, and there is nothing between it and your production systems.
+
+We went looking for the middleware layer that should exist — something you drop in front of any agent framework that intercepts tool calls before they execute, enforces policies, writes a tamper-evident log, and gives you a kill switch you can trigger in under 50ms. It did not exist. So we built it.
 
 AgentLedger is that layer. It wraps your agent's tools, evaluates policies synchronously before each call, appends every event to a SHA-256 hash chain you can verify later, and gives you a kill switch you can trigger in under 50ms from a dashboard API.
 

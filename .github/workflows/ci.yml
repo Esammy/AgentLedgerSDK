@@ -19,11 +19,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Build package
+        run: npm run build
+
       - name: Typecheck src
         run: npm run typecheck
 
       - name: Typecheck examples
-        run: npx tsc --noEmit --strict --target ES2020 --module NodeNext --moduleResolution NodeNext --esModuleInterop --skipLibCheck examples/*.ts
+        run: npm run typecheck:examples
 
       - name: Test
         run: npm test

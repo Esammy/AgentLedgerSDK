@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events'
-import { createHash, randomUUID } from 'crypto'
+import { randomUUID } from 'crypto'
 import { AsyncLocalStorage } from 'async_hooks'
 import type {
   LedgerEntry,
@@ -12,6 +12,7 @@ import { PolicyEngine } from '../policy/engine'
 import type { StorageConfig } from '../storage/storage'
 import { LedgerStorage } from '../storage/storage'
 import { Interceptor } from '../interceptor/interceptor'
+import { computeEntryId, GENESIS_PREV_ID } from './hash'
 
 export type {
   LedgerEntry,
@@ -42,7 +43,8 @@ export class AgentLedger extends EventEmitter {
   readonly storage: LedgerStorage
   readonly policy: PolicyEngine
   private interceptor: Interceptor
-  private chainHead: string = '0'.repeat(64)
+  // Per-run chain heads so concurrent runs each get an internally-consistent chain.
+  private chainHeads: Map<string, string> = new Map()
   private config: LedgerConfig
   private recordQueue: Promise<void> = Promise.resolve()
 
@@ -86,14 +88,14 @@ export class AgentLedger extends EventEmitter {
     return new Promise((resolve, reject) => {
       this.recordQueue = this.recordQueue.then(async () => {
         try {
-          const prev_id = this.chainHead
-          const id = createHash('sha256').update(prev_id + JSON.stringify(raw.payload)).digest('hex')
-          this.chainHead = id
+          const prev_id = this.chainHeads.get(raw.run_id) ?? GENESIS_PREV_ID
+          const withPrev = { ...raw, prev_id }
+          const id = computeEntryId(withPrev)
+          this.chainHeads.set(raw.run_id, id)
 
           const entry: LedgerEntry = {
-            ...raw,
+            ...withPrev,
             id,
-            prev_id,
             human_summary,
           }
 

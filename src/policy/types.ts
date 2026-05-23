@@ -9,6 +9,7 @@ export type RuleCondition =
   | { type: 'arg_gt'; path: string; value: number }
   | { type: 'time_after'; hour_utc: number }
   | { type: 'time_before'; hour_utc: number }
+  | { type: 'time_outside'; start_hour_utc: number; end_hour_utc: number }
   | { type: 'data_classification'; classifications: string[] }
   | { type: 'always' }
 

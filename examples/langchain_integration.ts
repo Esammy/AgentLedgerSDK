@@ -21,7 +21,7 @@ import { AgentLedger, POLICY_TEMPLATES, PolicyBlockError, ApprovalDeniedError } 
 // Tool names MUST match what policy templates check.
 // no_delete() matches: delete_file | deleteRecord | drop_table | fs.rm | unlink | rm_rf
 // no_spend_over(n) matches: charge_card | create_payment | purchase | stripe_charge
-// external_email_gate matches via heuristic: tools whose name includes send_email / sendEmail
+// external_email_gate: explicit OSS rule (send_email tools + to outside org domain)
 
 const tools = [
   {
@@ -64,6 +64,14 @@ const ledger = new AgentLedger({
     POLICY_TEMPLATES.no_delete(),                    // Blocks deleteRecord, delete_file, etc.
     POLICY_TEMPLATES.external_email_gate('corp.com'), // Approval gate for external emails
   ],
+})
+
+// Demo-only: auto-approve gates so the script exits (production: dashboard / human approves).
+// setTimeout(0) runs after the interceptor's await record() continuation registers the gate token.
+ledger.on('entry', entry => {
+  if (entry.type !== 'approval_gate') return
+  const token = (entry.payload as { override_token?: string }).override_token
+  if (token) setTimeout(() => void ledger.approveGate(token, 'langchain-example-reviewer'), 0)
 })
 
 // Wrap — returns the same agent object with tools intercepted
@@ -110,13 +118,7 @@ async function main() {
     // Case 4: Allowed — internal email (to: ends with @corp.com → gate does not fire)
     await callTool('send_email', { to: 'alice@corp.com', subject: 'Weekly report' })
 
-    // Case 5: external_email_gate fires — email to outside org triggers approve_gate
-    // In production you'd call ledger.approveGate(token, 'reviewer') from a dashboard
-    // or Slack webhook. Here the gate will auto-timeout after 30 min; for the demo
-    // we show the timeout path.
-    console.log('\n  [Note] external_email_gate fires on the next call.')
-    console.log('  In production: await ledger.approveGate(token, approver)')
-    console.log('  In this demo: we catch the timeout immediately.\n')
+    // Case 5: external_email_gate — outside @corp.com hits approve_gate; ledger.on above auto-approves for this demo only.
     await callTool('send_email', { to: 'partner@external.com', subject: 'Proposal' })
 
   }, 'demo-session-001')
