@@ -1,0 +1,140 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 480" width="820" height="480" role="img" aria-label="AgentLedger SDK demo — allow a payment, block a payment over policy limit, kill switch halts further calls, then chain verifies intact.">
+  <title>AgentLedger SDK — runtime trust layer demo</title>
+  <desc>Animated terminal showing four beats: ALLOW a $250 payment, BLOCK a $12,500 payment by policy, HALT all calls via kill switch, then VERIFY the audit chain is tamper-evident.</desc>
+
+  <style>
+    .bg            { fill: #00142a; }
+    .terminal-bg   { fill: #081728; }
+    .titlebar-bg   { fill: #081c32; }
+    .border        { stroke: #3c4948; stroke-width: 1; fill: none; }
+    .border-fill   { stroke: #3c4948; stroke-width: 1; fill: #122D4B; }
+    .glow          { stroke: #1abcb5; stroke-width: 1; opacity: 0.35; }
+    .dot           { fill: #1E3D5F; stroke: #3c4948; stroke-width: 0.5; }
+    .mono          { font-family: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace; }
+    .sans          { font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+    .title         { fill: #4ddbd3; font-size: 24px; font-weight: 700; letter-spacing: -0.02em; }
+    .subtitle      { fill: #bbc9c7; font-size: 14px; font-weight: 400; }
+    .chain         { fill: #4ddbd3; font-size: 11px; font-weight: 700; letter-spacing: 0.5px; }
+    .label         { fill: #bbc9c7; font-size: 10px; letter-spacing: 1.5px; font-weight: 700; }
+    .prompt        { fill: #d2e4ff; font-size: 12px; }
+    .allow         { fill: #6ff7ef; font-size: 12px; font-weight: 700; }
+    .error         { fill: #ffb4ab; font-size: 12px; font-weight: 700; }
+    .warning       { fill: #FFB347; font-size: 12px; font-weight: 700; }
+    .muted         { fill: #bbc9c7; font-size: 12px; }
+    .brand         { fill: #4ddbd3; font-size: 11px; font-weight: 700; letter-spacing: 2.5px; }
+    .url           { fill: #bbc9c7; font-size: 12px; }
+  </style>
+
+  <!-- Background -->
+  <rect class="bg" width="820" height="480" />
+
+  <!-- ───── Header ───── -->
+  <text x="410" y="38" text-anchor="middle">
+    <tspan class="sans title">AgentLedger</tspan>
+    <tspan class="sans subtitle"> — runtime trust layer for AI agents</tspan>
+  </text>
+
+  <!-- Chain row -->
+  <line x1="195" y1="100" x2="625" y2="100" class="glow" />
+
+  <g>
+    <rect x="195" y="88" width="90" height="24" rx="4" class="border-fill" />
+    <text x="240" y="104" text-anchor="middle" class="mono chain">0x7A…F1</text>
+  </g>
+  <g>
+    <rect x="305" y="88" width="90" height="24" rx="4" class="border-fill" />
+    <text x="350" y="104" text-anchor="middle" class="mono chain">0xB3…9C</text>
+  </g>
+  <g>
+    <rect x="415" y="88" width="90" height="24" rx="4" class="border-fill" />
+    <text x="460" y="104" text-anchor="middle" class="mono chain">0x92…E4</text>
+  </g>
+  <g>
+    <rect x="525" y="88" width="90" height="24" rx="4" class="border-fill" />
+    <text x="570" y="104" text-anchor="middle" class="mono chain">0x2F…A9</text>
+  </g>
+
+  <!-- Chain "verified" pulse animation: each block briefly highlights teal toward end of cycle -->
+  <rect x="195" y="88" width="90" height="24" rx="4" fill="none" stroke="#4ddbd3" stroke-width="1.5" opacity="0">
+    <animate attributeName="opacity" values="0;0;0;1;0" keyTimes="0;0.80;0.83;0.86;0.95" dur="14s" repeatCount="indefinite" />
+  </rect>
+  <rect x="305" y="88" width="90" height="24" rx="4" fill="none" stroke="#4ddbd3" stroke-width="1.5" opacity="0">
+    <animate attributeName="opacity" values="0;0;0;1;0" keyTimes="0;0.82;0.85;0.88;0.95" dur="14s" repeatCount="indefinite" />
+  </rect>
+  <rect x="415" y="88" width="90" height="24" rx="4" fill="none" stroke="#4ddbd3" stroke-width="1.5" opacity="0">
+    <animate attributeName="opacity" values="0;0;0;1;0" keyTimes="0;0.84;0.87;0.90;0.95" dur="14s" repeatCount="indefinite" />
+  </rect>
+  <rect x="525" y="88" width="90" height="24" rx="4" fill="none" stroke="#4ddbd3" stroke-width="1.5" opacity="0">
+    <animate attributeName="opacity" values="0;0;0;1;0" keyTimes="0;0.86;0.89;0.92;0.95" dur="14s" repeatCount="indefinite" />
+  </rect>
+
+  <!-- ───── Terminal card ───── -->
+  <rect x="30" y="140" width="760" height="280" rx="6" class="terminal-bg" />
+  <rect x="30" y="140" width="760" height="280" rx="6" class="border" />
+
+  <!-- Title bar -->
+  <path d="M30,146 Q30,140 36,140 L784,140 Q790,140 790,146 L790,170 L30,170 Z" class="titlebar-bg" />
+  <line x1="30" y1="170" x2="790" y2="170" stroke="#3c4948" stroke-width="1" />
+
+  <circle cx="50" cy="155" r="5" class="dot" />
+  <circle cx="65" cy="155" r="5" class="dot" />
+  <circle cx="80" cy="155" r="5" class="dot" />
+  <text x="410" y="160" text-anchor="middle" class="mono label">audit_trail.ndjson</text>
+
+  <!-- ───── Terminal content: 4 beats appear in sequence ───── -->
+
+  <!-- Beat 1 — ALLOW (appears at ~2s of 14s loop) -->
+  <g opacity="1">
+    <animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.143;0.18;0.95;1" dur="14s" repeatCount="indefinite" />
+    <text x="50" y="200" class="mono prompt">root@agentledger:~# create_payment({ vendor: "Stripe", amount: $250 })</text>
+    <text x="70" y="220">
+      <tspan class="mono allow">✓ ALLOW</tspan>
+      <tspan class="mono muted"> · risk 35/100 · entry appended</tspan>
+    </text>
+  </g>
+
+  <!-- Beat 2 — BLOCKED (appears at ~4s) -->
+  <g opacity="1">
+    <animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.286;0.32;0.95;1" dur="14s" repeatCount="indefinite" />
+    <text x="50" y="248" class="mono prompt">root@agentledger:~# create_payment({ vendor: "Unknown", amount: $12,500 })</text>
+    <text x="70" y="268">
+      <tspan class="mono error">✗ BLOCKED</tspan>
+      <tspan class="mono muted"> · policy: no_spend_over($500) · </tspan>
+      <tspan class="mono error">risk 100/100</tspan>
+    </text>
+  </g>
+
+  <!-- Beat 3 — HALTED (appears at ~6s) -->
+  <g opacity="1">
+    <animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.429;0.46;0.95;1" dur="14s" repeatCount="indefinite" />
+    <text x="50" y="296" class="mono prompt">root@agentledger:~# ledger.killSwitch("run-prod")</text>
+    <text x="70" y="316">
+      <tspan class="mono warning">⚡ HALTED</tspan>
+      <tspan class="mono muted"> · all tool calls rejected in &lt;50ms</tspan>
+    </text>
+  </g>
+
+  <!-- Beat 4 — VERIFY (appears at ~8s) -->
+  <g opacity="1">
+    <animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.571;0.61;0.95;1" dur="14s" repeatCount="indefinite" />
+    <text x="50" y="344" class="mono prompt">root@agentledger:~# ledger.verify("run-prod")</text>
+    <text x="70" y="364">
+      <tspan class="mono allow">✓ Chain intact</tspan>
+      <tspan class="mono muted"> — tamper-evident audit trail verified</tspan>
+    </text>
+  </g>
+
+  <!-- Trailing prompt with blinking caret (appears at ~10s, holds) -->
+  <g opacity="1">
+    <animate attributeName="opacity" values="0;0;1;1;0" keyTimes="0;0.714;0.75;0.95;1" dur="14s" repeatCount="indefinite" />
+    <text x="50" y="395" class="mono prompt">root@agentledger:~#</text>
+    <rect x="195" y="384" width="7" height="14" fill="#4ddbd3">
+      <animate attributeName="opacity" values="1;0;1" keyTimes="0;0.5;1" dur="1.1s" repeatCount="indefinite" />
+    </rect>
+  </g>
+
+  <!-- ───── Footer ───── -->
+  <line x1="0" y1="440" x2="820" y2="440" stroke="#3c4948" stroke-width="1" />
+  <text x="30" y="461" class="mono brand">AGENTLEDGER</text>
+  <text x="790" y="461" text-anchor="end" class="mono url">github.com/Esammy/AgentLedgerSDK</text>
+</svg>

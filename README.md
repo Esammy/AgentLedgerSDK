@@ -9,9 +9,9 @@
 
 ---
 
-Record a **GIF** from the scripted demo in [`examples/demo_recording.ts`](./examples/demo_recording.ts): run `npm run demo:record` (add pauses with `DEMO_PAUSE_SEC=1.2` on macOS/Linux, or `$env:DEMO_PAUSE_SEC='1.2'` in PowerShell), capture the terminal (OBS or Windows Game Bar), then convert with `ffmpeg` — see comments at the top of that file. Save the result as `./demo.gif` and uncomment the image line below.
-
-<!-- <img src="./demo.gif" alt="AgentLedger demo: policy block, audit chain, kill switch" width="820" /> -->
+<p align="center">
+  <img src="./assets/demo.svg" alt="AgentLedger demo: allow a $250 payment, block a $12,500 payment by policy, kill switch halts further calls, then chain verifies tamper-evident" width="820" />
+</p>
 
 ---
 

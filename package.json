@@ -1,6 +1,6 @@
 {
   "name": "@ai-agent-ledger/sdk",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "description": "Runtime observability, policy enforcement, and audit trails for AI agents",
   "repository": {
     "type": "git",
@@ -34,7 +34,6 @@
     "ci:local": "npm run typecheck && npm run typecheck:examples && npm run build && npm test",
     "typecheck": "tsc --noEmit",
     "typecheck:examples": "tsc --noEmit --project tsconfig.examples.json",
-    "demo:record": "npx tsx examples/demo_recording.ts",
     "prepack": "npm run build"
   },
   "keywords": [
