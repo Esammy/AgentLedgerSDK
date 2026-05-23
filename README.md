@@ -222,11 +222,16 @@ AgentLedger is Open-Core. The MIT SDK is the execution engine — free forever. 
 
 ---
 
-## Star History
+<!--
+  Star History — bring this section back once the repo has ~200+ stars with visible momentum.
+  Below that threshold an empty chart actively hurts perception. Just uncomment when ready.
 
-[![Star History Chart](https://api.star-history.com/svg?repos=Esammy/AgentLedgerSDK&type=Date)](https://star-history.com/#Esammy/AgentLedgerSDK&Date)
+  ## Star History
 
----
+  [![Star History Chart](https://api.star-history.com/svg?repos=Esammy/AgentLedgerSDK&type=Date)](https://star-history.com/#Esammy/AgentLedgerSDK&Date)
+
+  ---
+-->
 
 ## Project Structure
 
