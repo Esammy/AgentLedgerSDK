@@ -15,6 +15,23 @@ export type {
 export {
   PolicyEngine,
   POLICY_TEMPLATES,
+  ClaudeCompiler,
+  GeminiCompiler,
+  ChatCompletionsCompiler,
+  createOpenAICompiler,
+  createGroqCompiler,
+  createMistralCompiler,
+  createGrokCompiler,
+  createTogetherCompiler,
+  createDeepSeekCompiler,
+  createFireworksCompiler,
+  createAzureOpenAICompiler,
+  CompilerParseError,
+  parseCompiledRule,
+  parseCompiledRuleFromModelText,
+  getCompiledRuleJsonSchema,
+  COMPILED_RULE_JSON_SCHEMA_NAME,
+  getPolicyCompilerSystemPrompt,
 } from './policy/index'
 
 export type {
@@ -25,10 +42,22 @@ export type {
   EvalContext,
   CompiledRule,
   RuleCondition,
+  LLMCompiler,
+  GroqCompilerOptions,
+  GeminiCompilerOptions,
+  ClaudeCompilerOptions,
+  ChatCompletionsCompilerOptions,
+  ChatCompletionsResponseFormat,
 } from './policy/index'
 
 export { LedgerStorage, verifyChain } from './storage/storage'
-export type { StorageConfig, EntryFilter, ChainVerification } from './storage/storage'
+export type {
+  StorageConfig,
+  EntryFilter,
+  ChainVerification,
+  RunChainVerification,
+  ChainBreakReason,
+} from './storage/storage'
 
 export { RiskScorer } from './risk/risk'
 

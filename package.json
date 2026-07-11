@@ -1,6 +1,6 @@
 {
   "name": "@ai-agent-ledger/sdk",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Runtime observability, policy enforcement, and audit trails for AI agents",
   "repository": {
     "type": "git",
@@ -43,7 +43,11 @@
     "policy",
     "governance",
     "llm",
-    "langchain"
+    "langchain",
+    "mcp",
+    "guardrails",
+    "ai-safety",
+    "kill-switch"
   ],
   "license": "MIT",
   "peerDependencies": {
@@ -66,6 +70,7 @@
     "node": ">=18.0.0"
   },
   "files": [
+    "LICENSE",
     "dist",
     "README.md"
   ]

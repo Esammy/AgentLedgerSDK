@@ -1,6 +1,9 @@
 //
-// Policies are defined via PolicyInput.rule (a structured CompiledRule).
-// Inputs without a `rule` are dropped; templates always supply one.
+// Policies are defined in two ways:
+//   1. Structured rule via PolicyInput.rule (templates always supply one).
+//   2. Natural language via addPolicyAsync(input, compiler) — compiled ONCE
+//      into a CompiledRule; evaluation stays synchronous and LLM-free.
+// Constructor inputs without a `rule` are dropped.
 //
 import type {
   CompiledRule,
@@ -9,6 +12,7 @@ import type {
   PolicyInput,
   RuleCondition,
 } from './types'
+import type { LLMCompiler } from './compilers/llm-compiler'
 import { classifyArgs } from '../risk/risk'
 
 export class PolicyEngine {
@@ -18,6 +22,24 @@ export class PolicyEngine {
     for (const p of policies) {
       if (p.rule) this.rules.push({ ...p.rule, input: p })
     }
+  }
+
+  /**
+   * Compile a natural-language policy description into a CompiledRule and add
+   * it to the engine. The LLM runs once here (e.g. at startup) — never on the
+   * per-tool-call evaluation path. The input's action/severity/escalate_to
+   * take precedence over whatever the model emitted.
+   */
+  async addPolicyAsync(input: PolicyInput, llmCompiler: LLMCompiler): Promise<void> {
+    const rule = await llmCompiler.compile(input.description)
+    this.rules.push({
+      ...rule,
+      id: rule.id || randomId(),
+      action: input.action,
+      severity: input.severity ?? rule.severity ?? 'medium',
+      escalate_to: input.escalate_to ?? rule.escalate_to,
+      input,
+    })
   }
 
   evaluate(ctx: EvalContext): PolicyDecision {
@@ -88,6 +110,13 @@ export class PolicyEngine {
         return false
     }
   }
+}
+
+function randomId(): string {
+  if (typeof globalThis.crypto !== 'undefined' && 'randomUUID' in globalThis.crypto) {
+    return globalThis.crypto.randomUUID()
+  }
+  return Math.random().toString(36).slice(2)
 }
 
 function getPath(obj: unknown, path: string): unknown {

@@ -193,7 +193,7 @@ export class Interceptor {
       interceptor.ledger
         .record({
           agent_id: agentId,
-          run_id: ledgerContext.getStore()?.run_id ?? 'unknown',
+          run_id: ledgerContext.getStore()?.run_id ?? randomUUID(),
           ts: start,
           type: 'llm_decision',
           risk_score: 10,

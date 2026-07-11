@@ -1,6 +1,6 @@
 import { appendFile, readFile } from 'fs/promises'
 import type { LedgerEntry } from '../ledger/types'
-import { computeEntryId } from '../ledger/hash'
+import { computeEntryId, GENESIS_PREV_ID } from '../ledger/hash'
 
 export interface EntryFilter {
   run_id?: string
@@ -11,11 +11,26 @@ export interface EntryFilter {
   min_risk?: number
 }
 
+export type ChainBreakReason = 'hash_mismatch' | 'link_broken' | 'bad_genesis'
+
+export interface RunChainVerification {
+  run_id: string
+  valid: boolean
+  /** Index of the first bad entry within this run's sequence. */
+  broken_at: number | null
+  reason?: ChainBreakReason
+  entry_count: number
+}
+
 export interface ChainVerification {
   valid: boolean
+  /** Index of the first bad entry within the array passed to verifyChain. */
   broken_at: number | null
+  reason?: ChainBreakReason
   entry_count: number
   verified_at: number
+  /** Per-run breakdown — entries are chained per run_id, so mixed-run arrays verify run by run. */
+  runs: RunChainVerification[]
 }
 
 export type StorageConfig =
@@ -25,25 +40,71 @@ export type StorageConfig =
   | { type: 'memory' }
 
 export function verifyChain(entries: LedgerEntry[]): ChainVerification {
-  let valid = true
-  let broken_at: number | null = null
-
+  // Entries chain per run_id, so group first (preserving stored order within
+  // each run). Callers may pass a single run or a whole mixed-run log file.
+  const byRun = new Map<string, { entry: LedgerEntry; index: number }[]>()
   for (let i = 0; i < entries.length; i++) {
-    const e = entries[i]
-    // Re-derive the id from every other field. If anyone tampered with ts,
-    // run_id, agent_id, type, payload, risk_score, OR prev_id, the hash
-    // breaks here.
-    const { id, human_summary, ...rest } = e
-    void human_summary
-    const expected = computeEntryId(rest)
-    if (expected !== id) {
-      valid = false
-      broken_at = i
-      break
-    }
+    const item = { entry: entries[i], index: i }
+    const list = byRun.get(entries[i].run_id)
+    if (list) list.push(item)
+    else byRun.set(entries[i].run_id, [item])
   }
 
-  return { valid, broken_at, entry_count: entries.length, verified_at: Date.now() }
+  const runs: RunChainVerification[] = []
+  // Track the earliest failure position in the ORIGINAL array across runs.
+  let firstFailureIndex: number | null = null
+  let firstFailureReason: ChainBreakReason | undefined
+
+  for (const [run_id, items] of byRun) {
+    const run: RunChainVerification = {
+      run_id,
+      valid: true,
+      broken_at: null,
+      entry_count: items.length,
+    }
+
+    for (let j = 0; j < items.length; j++) {
+      const { entry, index } = items[j]
+
+      // 1. Linkage: each entry must point at its predecessor's id, and the
+      //    first entry at the genesis sentinel. Catches deleted, reordered,
+      //    or truncated entries — per-entry hashes alone cannot.
+      const expectedPrev = j === 0 ? GENESIS_PREV_ID : items[j - 1].entry.id
+      let reason: ChainBreakReason | undefined
+      if (entry.prev_id !== expectedPrev) {
+        reason = j === 0 ? 'bad_genesis' : 'link_broken'
+      } else {
+        // 2. Integrity: re-derive the id from every other field. If anyone
+        //    tampered with ts, run_id, agent_id, type, payload, risk_score,
+        //    OR prev_id, the hash breaks here.
+        const { id, human_summary, ...rest } = entry
+        void human_summary
+        if (computeEntryId(rest) !== id) reason = 'hash_mismatch'
+      }
+
+      if (reason) {
+        run.valid = false
+        run.broken_at = j
+        run.reason = reason
+        if (firstFailureIndex === null || index < firstFailureIndex) {
+          firstFailureIndex = index
+          firstFailureReason = reason
+        }
+        break
+      }
+    }
+
+    runs.push(run)
+  }
+
+  return {
+    valid: firstFailureIndex === null,
+    broken_at: firstFailureIndex,
+    reason: firstFailureReason,
+    entry_count: entries.length,
+    verified_at: Date.now(),
+    runs,
+  }
 }
 
 function applyFilter(entries: LedgerEntry[], filter: EntryFilter): LedgerEntry[] {

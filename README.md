@@ -136,11 +136,12 @@ const governed = ledger.wrap(myAgent)
 ## Key Features
 
 *   **🛡️ Policy Enforcement:** Block or gate tool calls with deterministic rules — no LLM in the enforcement path.
-*   **⛓️ Tamper-Evident Ledger:** Every event is SHA-256 hash-chained. Any modification to the log breaks the chain at that point.
+*   **🧠 Natural-Language Policies:** Write policies in plain English; compiled once at startup (Claude, Gemini, OpenAI, Groq, …) into a deterministic rule AST.
+*   **⛓️ Tamper-Evident Ledger:** Every event is SHA-256 hash-chained. Edits, deletions, and reordering all break verification.
 *   **🛑 Kill Switch:** Call `ledger.killSwitch(run_id)` — the next tool invocation for that run throws immediately.
 *   **🔍 Risk Scoring:** Heuristic 0–100 scoring on tool names, arguments (PII/credential patterns), and payload size.
 *   **🧵 Request-Scoped Runs:** `ledger.run(cb, run_id)` uses `AsyncLocalStorage` to isolate audit context across concurrent async requests.
-*   **🤖 Framework Agnostic:** Works with LangChain, CrewAI, Anthropic, OpenAI, or any custom agent.
+*   **🤖 Framework Agnostic:** Works with LangChain, CrewAI, Anthropic, OpenAI, MCP servers (via the gateway), or any custom agent.
 
 ---
 
@@ -210,15 +211,50 @@ await server.listen({ port: 4000 })
 
 ---
 
-## 🧠 Enterprise Policy Engine
+## 🧠 Natural-Language Policies
 
-AgentLedger is Open-Core. The MIT SDK is the execution engine — free forever. The upcoming **`@ai-agent-ledger/policy-engine`** adds:
+Write policies in plain English. They compile **once at startup** into a deterministic rule AST — zero LLM calls on the enforcement path, so runtime evaluation stays synchronous and sub-2ms.
 
-*   **Natural Language → Policy AST:** Write policies in plain English; they compile once at startup using Claude, Gemini, or OpenAI. Zero LLM calls at runtime.
-*   **Slack / Teams / PagerDuty Escalation:** Approval gate workflows with native integrations and configurable timeout.
-*   **100+ Governance Templates:** Pre-built policies for Fintech, Healthcare (HIPAA), and Legal use cases.
+```typescript
+import { AgentLedger, ClaudeCompiler, createGroqCompiler } from '@ai-agent-ledger/sdk'
 
-*[Request early access →](https://github.com/Esammy/AgentLedgerSDK/issues/new?template=feature_request.md&title=Enterprise+access+request)*
+const ledger = new AgentLedger({ agent_id: 'my-agent', storage: { type: 'memory' } })
+
+// Pick any provider: ClaudeCompiler, GeminiCompiler, createOpenAICompiler,
+// createGroqCompiler, createMistralCompiler, createDeepSeekCompiler, ...
+const compiler = new ClaudeCompiler({ apiKey: process.env.ANTHROPIC_API_KEY! })
+
+await ledger.policy.addPolicyAsync(
+  {
+    description: 'Never allow sending emails to addresses ending in @competitor.com',
+    action: 'block',
+    severity: 'high',
+  },
+  compiler
+)
+// From here on, enforcement is pure JS — the LLM is never called again.
+```
+
+Supported compile-time providers: **Anthropic (Claude), Google (Gemini), OpenAI, Groq, Mistral, xAI, Together, DeepSeek, Fireworks, Azure OpenAI** — plus any OpenAI-compatible endpoint via `ChatCompletionsCompiler`.
+
+> Full example: [`examples/policy_compilation.ts`](./examples/policy_compilation.ts)
+
+---
+
+## Verify the Chain
+
+Every entry's `id` is a SHA-256 over the entry *including* its `prev_id`, and verification checks both per-entry integrity **and** link continuity — so editing, deleting, reordering, or truncating entries is detected:
+
+```typescript
+import { verifyChain } from '@ai-agent-ledger/sdk'
+
+const entries = await ledger.storage.query({ run_id: 'run-abc' })
+const result = verifyChain(entries)
+// { valid: false, broken_at: 3, reason: 'link_broken', runs: [...] }
+// reason: 'hash_mismatch' → a field was edited
+//         'link_broken'   → an entry was deleted/reordered mid-run
+//         'bad_genesis'   → the start of the run was truncated
+```
 
 ---
 
@@ -237,14 +273,16 @@ AgentLedger is Open-Core. The MIT SDK is the execution engine — free forever. 
 
 ```
 src/
-  ledger/      — AgentLedger core, SHA-256 chain, run context (AsyncLocalStorage)
-  interceptor/ — Tool wrapping, policy evaluation, kill switch, approval gates
-  policy/      — PolicyEngine, rule evaluator, built-in templates
-  risk/        — Heuristic risk scorer and PII/credential classifier
-  storage/     — Pluggable adapters: File (NDJSON), Memory, Cloud WebSocket
-  server/      — Lightweight Node http + WebSocket dashboard server
+  ledger/           — AgentLedger core, SHA-256 chain, run context (AsyncLocalStorage)
+  interceptor/      — Tool wrapping, policy evaluation, kill switch, approval gates
+  policy/           — PolicyEngine, rule evaluator, built-in templates
+  policy/compilers/ — Natural language → rule AST (Claude, Gemini, OpenAI-compatible)
+  risk/             — Heuristic risk scorer and PII/credential classifier
+  storage/          — Pluggable adapters: File (NDJSON), Memory, Cloud WebSocket
+  server/           — Lightweight Node http + WebSocket dashboard server
 examples/
   basic_usage.ts            — Quickstart: block + allow
+  policy_compilation.ts     — Natural-language policy → compiled rule
   concurrency_and_runs.ts   — Request-scoped run isolation
   langchain_integration.ts  — LangChain tool wrapping
   anthropic_integration.ts  — Anthropic Claude tool use

@@ -88,7 +88,14 @@ export class AgentLedger extends EventEmitter {
     return new Promise((resolve, reject) => {
       this.recordQueue = this.recordQueue.then(async () => {
         try {
-          const prev_id = this.chainHeads.get(raw.run_id) ?? GENESIS_PREV_ID
+          let prev_id = this.chainHeads.get(raw.run_id)
+          if (prev_id === undefined) {
+            // First record for this run in THIS process. If storage already
+            // holds entries for the run (process restart mid-run), resume the
+            // chain from the last persisted entry instead of re-anchoring at
+            // genesis — otherwise verifyChain would flag the run as broken.
+            prev_id = await this.recoverChainHead(raw.run_id)
+          }
           const withPrev = { ...raw, prev_id }
           const id = computeEntryId(withPrev)
           this.chainHeads.set(raw.run_id, id)
@@ -107,6 +114,17 @@ export class AgentLedger extends EventEmitter {
         }
       })
     })
+  }
+
+  private async recoverChainHead(run_id: string): Promise<string> {
+    try {
+      const existing = await this.storage.query({ run_id })
+      if (existing.length > 0) return existing[existing.length - 1].id
+    } catch {
+      // Storage unreadable (e.g. cloud adapter offline) — start a fresh
+      // chain rather than fail the record.
+    }
+    return GENESIS_PREV_ID
   }
 
   private defaultSummary(entry: Omit<LedgerEntry, 'id' | 'prev_id' | 'human_summary'>): string {
