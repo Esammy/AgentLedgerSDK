@@ -16,8 +16,28 @@
  */
 
 import http from 'node:http'
-import { WebSocketServer } from 'ws'
+import { createHash, timingSafeEqual } from 'node:crypto'
+import { WebSocket, WebSocketServer } from 'ws'
 import type { AgentLedger } from '../ledger/ledger'
+
+const MAX_BODY_BYTES = 1024 * 1024
+
+class HttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string
+  ) {
+    super(message)
+  }
+}
+
+/** Constant-time token comparison (hash first so lengths always match). */
+function tokenMatches(supplied: unknown, expected: string): boolean {
+  if (typeof supplied !== 'string') return false
+  const a = createHash('sha256').update(supplied).digest()
+  const b = createHash('sha256').update(expected).digest()
+  return timingSafeEqual(a, b)
+}
 
 export interface DashboardServerOptions {
   /** Shared secret required on `X-AgentLedger-Token` for all requests. */
@@ -61,8 +81,7 @@ export function createDashboardServer(
     }
 
     if (requireToken) {
-      const supplied = req.headers['x-agentledger-token']
-      if (supplied !== requireToken) {
+      if (!tokenMatches(req.headers['x-agentledger-token'], requireToken)) {
         res.statusCode = 401
         res.end(JSON.stringify({ error: 'unauthorized' }))
         return
@@ -97,7 +116,11 @@ export function createDashboardServer(
         const body = await readBody(req)
         const token = parts[1] as string
         const approved_by = typeof body.approved_by === 'string' ? body.approved_by : 'dashboard'
-        await ledger.approveGate(token, approved_by)
+        if (!(await ledger.approveGate(token, approved_by))) {
+          res.statusCode = 404
+          res.end(JSON.stringify({ error: 'no pending approval for this token' }))
+          return
+        }
         res.end(JSON.stringify({ approved: true, token }))
         return
       }
@@ -106,7 +129,11 @@ export function createDashboardServer(
         const body = await readBody(req)
         const token = parts[1] as string
         const denied_by = typeof body.denied_by === 'string' ? body.denied_by : 'dashboard'
-        await ledger.denyGate(token, denied_by)
+        if (!(await ledger.denyGate(token, denied_by))) {
+          res.statusCode = 404
+          res.end(JSON.stringify({ error: 'no pending approval for this token' }))
+          return
+        }
         res.end(JSON.stringify({ denied: true, token }))
         return
       }
@@ -132,8 +159,15 @@ export function createDashboardServer(
       res.statusCode = 404
       res.end(JSON.stringify({ error: 'not found' }))
     } catch (err) {
+      if (err instanceof HttpError) {
+        res.statusCode = err.status
+        res.end(JSON.stringify({ error: err.message }))
+        return
+      }
+      // Don't leak internals to clients; log them server-side instead.
+      console.error('[AgentLedger] request failed:', err)
       res.statusCode = 500
-      res.end(JSON.stringify({ error: String(err) }))
+      res.end(JSON.stringify({ error: 'internal error' }))
     }
   })
 
@@ -153,7 +187,7 @@ export function createDashboardServer(
         (request.headers['x-agentledger-token'] as string | undefined) ??
         url.searchParams.get('token') ??
         undefined
-      if (supplied !== requireToken) {
+      if (!tokenMatches(supplied, requireToken)) {
         socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
         socket.destroy()
         return
@@ -162,23 +196,25 @@ export function createDashboardServer(
     wss.handleUpgrade(request, socket, head, ws => wss.emit('connection', ws, request))
   })
 
+  // One listener per event for the whole server (not per client), fanning out
+  // to open sockets — avoids MaxListenersExceeded warnings with many clients.
+  const broadcast = (type: string) => (data: unknown) => {
+    const msg = JSON.stringify({ type, data })
+    for (const client of wss.clients) {
+      if (client.readyState === WebSocket.OPEN) client.send(msg)
+    }
+  }
+  const listeners: Record<string, (data: unknown) => void> = {
+    entry: broadcast('entry'),
+    kill: broadcast('kill'),
+    escalation: broadcast('escalation'),
+    alert: broadcast('alert'),
+  }
+  for (const [event, fn] of Object.entries(listeners)) ledger.on(event, fn)
+
   wss.on('connection', ws => {
-    const onEntry = (entry: unknown) => ws.send(JSON.stringify({ type: 'entry', data: entry }))
-    const onKill = (ev: unknown) => ws.send(JSON.stringify({ type: 'kill', data: ev }))
-    const onEsc = (ev: unknown) => ws.send(JSON.stringify({ type: 'escalation', data: ev }))
-    const onAlert = (ev: unknown) => ws.send(JSON.stringify({ type: 'alert', data: ev }))
-
-    ledger.on('entry', onEntry)
-    ledger.on('kill', onKill)
-    ledger.on('escalation', onEsc)
-    ledger.on('alert', onAlert)
-
-    ws.on('close', () => {
-      ledger.off('entry', onEntry)
-      ledger.off('kill', onKill)
-      ledger.off('escalation', onEsc)
-      ledger.off('alert', onAlert)
-    })
+    // Without an error listener a socket error would crash the process.
+    ws.on('error', () => ws.terminate())
   })
 
   return {
@@ -197,8 +233,12 @@ export function createDashboardServer(
       }),
     close: () =>
       new Promise<void>(resolve => {
+        for (const [event, fn] of Object.entries(listeners)) ledger.off(event, fn)
+        // Open sockets/keep-alive connections would otherwise stall shutdown.
+        for (const client of wss.clients) client.terminate()
         wss.close()
         httpServer.close(() => resolve())
+        httpServer.closeAllConnections?.()
       }),
     httpServer,
     wss,
@@ -206,14 +246,33 @@ export function createDashboardServer(
 }
 
 function readBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
-  return new Promise(resolve => {
-    let body = ''
-    req.on('data', chunk => (body += chunk))
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []
+    let size = 0
+    let tooLarge = false
+    req.on('data', (chunk: Buffer) => {
+      if (tooLarge) return
+      size += chunk.length
+      if (size > MAX_BODY_BYTES) {
+        tooLarge = true
+        chunks.length = 0
+        return // keep draining so the response can still be delivered
+      }
+      chunks.push(chunk)
+    })
+    req.on('error', reject)
     req.on('end', () => {
+      if (tooLarge) return reject(new HttpError(413, 'request body too large'))
+      const text = Buffer.concat(chunks).toString('utf8')
+      if (!text.trim()) return resolve({})
       try {
-        resolve(JSON.parse(body))
+        const parsed: unknown = JSON.parse(text)
+        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          return reject(new HttpError(400, 'body must be a JSON object'))
+        }
+        resolve(parsed as Record<string, unknown>)
       } catch {
-        resolve({})
+        reject(new HttpError(400, 'invalid JSON body'))
       }
     })
   })

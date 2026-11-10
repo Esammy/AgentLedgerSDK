@@ -25,6 +25,8 @@ export type {
   LLMInterface,
 } from './types'
 
+const MAX_CHAIN_HEADS = 10_000
+
 export const ledgerContext = new AsyncLocalStorage<{ run_id: string }>()
 
 export interface LedgerConfig {
@@ -47,6 +49,7 @@ export class AgentLedger extends EventEmitter {
   private chainHeads: Map<string, string> = new Map()
   private config: LedgerConfig
   private recordQueue: Promise<void> = Promise.resolve()
+  private inflight = new Set<Promise<LedgerEntry>>()
 
   constructor(config: LedgerConfig) {
     super()
@@ -72,15 +75,38 @@ export class AgentLedger extends EventEmitter {
     this.emit('kill', { run_id: run_id ?? '__all__', ts: Date.now() })
   }
 
-  async approveGate(token: string, approved_by: string): Promise<void> {
-    this.interceptor.resolveGate(token, { approved: true, approved_by })
+  /** Resolves true if a pending gate with this token was approved, false if unknown/expired. */
+  async approveGate(token: string, approved_by: string): Promise<boolean> {
+    return this.interceptor.resolveGate(token, { approved: true, approved_by })
   }
 
-  async denyGate(token: string, denied_by: string): Promise<void> {
-    this.interceptor.resolveGate(token, { approved: false, denied_by })
+  /** Resolves true if a pending gate with this token was denied, false if unknown/expired. */
+  async denyGate(token: string, denied_by: string): Promise<boolean> {
+    return this.interceptor.resolveGate(token, { approved: false, denied_by })
   }
 
-  async record(input: Omit<LedgerEntry, 'id' | 'prev_id' | 'human_summary'>): Promise<LedgerEntry> {
+  /** Wait for all in-flight (including fire-and-forget) entries to be persisted. */
+  async flush(): Promise<void> {
+    while (this.inflight.size > 0) await Promise.allSettled([...this.inflight])
+  }
+
+  /** Flush pending entries, then release storage resources (sockets, timers). */
+  async close(): Promise<void> {
+    await this.flush()
+    this.storage.close()
+  }
+
+  record(input: Omit<LedgerEntry, 'id' | 'prev_id' | 'human_summary'>): Promise<LedgerEntry> {
+    const p = this.recordInner(input)
+    this.inflight.add(p)
+    p.then(
+      () => this.inflight.delete(p),
+      () => this.inflight.delete(p)
+    )
+    return p
+  }
+
+  private async recordInner(input: Omit<LedgerEntry, 'id' | 'prev_id' | 'human_summary'>): Promise<LedgerEntry> {
     // Snapshot + normalize to its JSON form: the hash then matches what storage
     // round-trips, and later mutation of caller-owned objects can't alter it.
     const raw = normalizeForLedger(input)
@@ -111,7 +137,7 @@ export class AgentLedger extends EventEmitter {
           await this.storage.append(entry)
           // Advance the head only once the entry is durably stored; otherwise a
           // failed write would leave a permanent gap in the chain.
-          this.chainHeads.set(raw.run_id, id)
+          this.setHead(raw.run_id, id)
           this.emit('entry', entry)
           resolve(entry)
         } catch (err) {
@@ -119,6 +145,16 @@ export class AgentLedger extends EventEmitter {
         }
       })
     })
+  }
+
+  /** Bounded cache: an evicted run simply recovers its head from storage on next write. */
+  private setHead(run_id: string, id: string): void {
+    this.chainHeads.delete(run_id)
+    this.chainHeads.set(run_id, id)
+    if (this.chainHeads.size > MAX_CHAIN_HEADS) {
+      const oldest = this.chainHeads.keys().next().value
+      if (oldest !== undefined) this.chainHeads.delete(oldest)
+    }
   }
 
   private async recoverChainHead(run_id: string): Promise<string> {
@@ -143,6 +179,9 @@ export class AgentLedger extends EventEmitter {
     }
     if (entry.type === 'approval_gate') {
       const p = entry.payload as PolicyBlockPayload
+      if (p.resolution) {
+        return `APPROVAL ${p.resolution.toUpperCase()}: "${p.blocked_action}"${p.resolved_by ? ` by ${p.resolved_by}` : ''}`
+      }
       return `PENDING APPROVAL: "${p.blocked_action}" — awaiting human review`
     }
     return `Agent LLM decision recorded`
