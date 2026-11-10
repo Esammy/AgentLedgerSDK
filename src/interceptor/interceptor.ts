@@ -13,6 +13,15 @@ interface GateResolution {
 
 const WRAPPED_MARKER = '__agentledger_wrapped'
 
+/** JSON preview that never throws (circular refs, BigInt, ...). */
+function preview(value: unknown, max: number): string {
+  try {
+    return (JSON.stringify(value) ?? 'undefined').slice(0, max)
+  } catch {
+    return '[unserializable]'
+  }
+}
+
 type WrappedFunc = ((...args: unknown[]) => Promise<unknown>) & {
   [WRAPPED_MARKER]?: true
 }
@@ -20,7 +29,7 @@ type WrappedFunc = ((...args: unknown[]) => Promise<unknown>) & {
 export class Interceptor {
   private halted = new Set<string>()
   private scorer = new RiskScorer()
-  private pendingGates = new Map<string, (resolution: GateResolution) => void>()
+  private pendingGates = new Map<string, { runId: string; resolve: (resolution: GateResolution) => void }>()
 
   constructor(private ledger: AgentLedger) {}
 
@@ -72,7 +81,7 @@ export class Interceptor {
             payload: {
               policy_id: decision.policy_id!,
               policy_text: decision.reason,
-              blocked_action: `${tool.name}(${JSON.stringify(args).slice(0, 200)})`,
+              blocked_action: `${tool.name}(${preview(args, 200)})`,
               escalated_to: decision.escalate_to,
             },
           })
@@ -97,7 +106,7 @@ export class Interceptor {
             payload: {
               policy_id: decision.policy_id!,
               policy_text: decision.reason,
-              blocked_action: `${tool.name}(${JSON.stringify(args).slice(0, 200)})`,
+              blocked_action: `${tool.name}(${preview(args, 200)})`,
               escalated_to: decision.escalate_to,
               override_token: token,
             },
@@ -105,7 +114,34 @@ export class Interceptor {
         } catch (err) {
           interceptor.ledger.emit('storage_error', err)
         }
-        const resolution = await interceptor.waitForApproval(token, decision)
+        const resolution = await interceptor.waitForApproval(token, decision, runId)
+        // Audit the outcome so the ledger shows who approved/denied and why.
+        const outcome = resolution.approved
+          ? 'approved'
+          : resolution.denied_by === 'timeout'
+            ? 'timeout'
+            : resolution.denied_by === 'kill_switch'
+              ? 'kill_switch'
+              : 'denied'
+        try {
+          await interceptor.ledger.record({
+            agent_id: agentId,
+            run_id: runId,
+            ts: Date.now(),
+            type: 'approval_gate',
+            risk_score: resolution.approved ? 25 : 50,
+            payload: {
+              policy_id: decision.policy_id!,
+              policy_text: decision.reason,
+              blocked_action: `${tool.name}(${preview(args, 200)})`,
+              override_token: token,
+              resolution: outcome,
+              resolved_by: resolution.approved ? resolution.approved_by : resolution.denied_by,
+            },
+          })
+        } catch (err) {
+          interceptor.ledger.emit('storage_error', err)
+        }
         if (!resolution.approved) {
           throw new ApprovalDeniedError(`Gate denied by ${resolution.denied_by}`)
         }
@@ -119,7 +155,7 @@ export class Interceptor {
           policy_id: decision.policy_id,
           reason: decision.reason,
           tool: tool.name,
-          args_preview: JSON.stringify(args).slice(0, 300),
+          args_preview: preview(args, 300),
           escalate_to: decision.escalate_to,
           run_id: runId,
           agent_id: agentId,
@@ -188,12 +224,16 @@ export class Interceptor {
   ): WrappedFunc {
     const interceptor = this
     const wrapped: WrappedFunc = async (...args: unknown[]): Promise<unknown> => {
+      const llmRunId = ledgerContext.getStore()?.run_id ?? randomUUID()
+      if (interceptor.halted.has('__all__') || interceptor.halted.has(llmRunId)) {
+        throw new KillSwitchError(llmRunId)
+      }
       const start = Date.now()
       const result = await originalInvoke(...args)
       interceptor.ledger
         .record({
           agent_id: agentId,
-          run_id: ledgerContext.getStore()?.run_id ?? randomUUID(),
+          run_id: llmRunId,
           ts: start,
           type: 'llm_decision',
           risk_score: 10,
@@ -221,7 +261,8 @@ export class Interceptor {
 
   private async waitForApproval(
     token: string,
-    decision: ReturnType<AgentLedger['policy']['evaluate']>
+    decision: ReturnType<AgentLedger['policy']['evaluate']>,
+    runId: string
   ): Promise<GateResolution> {
     if (decision.escalate_to?.length) {
       await this.escalate(decision, 'approval_gate', [], token)
@@ -237,19 +278,23 @@ export class Interceptor {
       // a gate — let the process exit naturally if everything else is done.
       if (typeof timer.unref === 'function') timer.unref()
 
-      this.pendingGates.set(token, resolution => {
-        clearTimeout(timer)
-        resolve(resolution)
+      this.pendingGates.set(token, {
+        runId,
+        resolve: resolution => {
+          clearTimeout(timer)
+          resolve(resolution)
+        },
       })
     })
   }
 
-  resolveGate(token: string, resolution: GateResolution): void {
-    const resolver = this.pendingGates.get(token)
-    if (resolver) {
-      this.pendingGates.delete(token)
-      resolver(resolution)
-    }
+  /** Returns false when the token is unknown, expired or already resolved. */
+  resolveGate(token: string, resolution: GateResolution): boolean {
+    const pending = this.pendingGates.get(token)
+    if (!pending) return false
+    this.pendingGates.delete(token)
+    pending.resolve(resolution)
+    return true
   }
 
   private async escalate(
@@ -262,7 +307,7 @@ export class Interceptor {
       policy_id: decision.policy_id,
       reason: decision.reason,
       tool: toolName,
-      args_preview: JSON.stringify(args).slice(0, 300),
+      args_preview: preview(args, 300),
       escalate_to: decision.escalate_to,
       approval_token: approvalToken,
       ts: Date.now(),
@@ -270,10 +315,13 @@ export class Interceptor {
   }
 
   async halt(run_id?: string): Promise<void> {
-    if (run_id) {
-      this.halted.add(run_id)
-    } else {
-      this.halted.add('__all__')
+    this.halted.add(run_id ?? '__all__')
+    // Release approval gates the halted run(s) are blocked on, instead of
+    // leaving them hanging for the full 30-minute timeout.
+    for (const [token, pending] of [...this.pendingGates]) {
+      if (!run_id || pending.runId === run_id) {
+        this.resolveGate(token, { approved: false, denied_by: 'kill_switch' })
+      }
     }
   }
 }

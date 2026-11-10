@@ -24,6 +24,9 @@ export interface PolicyBlockPayload {
   blocked_action: string
   escalated_to?: string[]
   override_token?: string
+  /** Set on the follow-up entry written when an approval gate is resolved. */
+  resolution?: 'approved' | 'denied' | 'timeout' | 'kill_switch'
+  resolved_by?: string
 }
 
 export type EntryPayload = ToolCallPayload | LLMDecisionPayload | PolicyBlockPayload
