@@ -33,7 +33,17 @@ export function createDashboardServer(
   const { requireToken, corsOrigin } = options
 
   const httpServer = http.createServer(async (req: http.IncomingMessage, res: http.ServerResponse) => {
-    const url = new URL(req.url ?? '/', `http://${req.headers.host}`)
+    // Fixed base: never trust the Host header, and never let a malformed
+    // request URL escape as an unhandled rejection (which kills the process).
+    let url: URL
+    try {
+      url = new URL(req.url ?? '/', 'http://localhost')
+    } catch {
+      res.statusCode = 400
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ error: 'bad request' }))
+      return
+    }
     const parts = url.pathname.split('/').filter(Boolean)
 
     res.setHeader('Content-Type', 'application/json')
@@ -131,7 +141,14 @@ export function createDashboardServer(
 
   httpServer.on('upgrade', (request, socket, head) => {
     if (requireToken) {
-      const url = new URL(request.url ?? '/', `http://${request.headers.host}`)
+      let url: URL
+      try {
+        url = new URL(request.url ?? '/', 'http://localhost')
+      } catch {
+        socket.write('HTTP/1.1 400 Bad Request\r\n\r\n')
+        socket.destroy()
+        return
+      }
       const supplied =
         (request.headers['x-agentledger-token'] as string | undefined) ??
         url.searchParams.get('token') ??

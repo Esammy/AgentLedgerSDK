@@ -12,7 +12,7 @@ import { PolicyEngine } from '../policy/engine'
 import type { StorageConfig } from '../storage/storage'
 import { LedgerStorage } from '../storage/storage'
 import { Interceptor } from '../interceptor/interceptor'
-import { computeEntryId, GENESIS_PREV_ID } from './hash'
+import { computeEntryId, GENESIS_PREV_ID, normalizeForLedger } from './hash'
 
 export type {
   LedgerEntry,
@@ -80,7 +80,10 @@ export class AgentLedger extends EventEmitter {
     this.interceptor.resolveGate(token, { approved: false, denied_by })
   }
 
-  async record(raw: Omit<LedgerEntry, 'id' | 'prev_id' | 'human_summary'>): Promise<LedgerEntry> {
+  async record(input: Omit<LedgerEntry, 'id' | 'prev_id' | 'human_summary'>): Promise<LedgerEntry> {
+    // Snapshot + normalize to its JSON form: the hash then matches what storage
+    // round-trips, and later mutation of caller-owned objects can't alter it.
+    const raw = normalizeForLedger(input)
     const human_summary = this.config.summarizer
       ? await this.config.summarizer(raw)
       : this.defaultSummary(raw)
@@ -98,7 +101,6 @@ export class AgentLedger extends EventEmitter {
           }
           const withPrev = { ...raw, prev_id }
           const id = computeEntryId(withPrev)
-          this.chainHeads.set(raw.run_id, id)
 
           const entry: LedgerEntry = {
             ...withPrev,
@@ -107,6 +109,9 @@ export class AgentLedger extends EventEmitter {
           }
 
           await this.storage.append(entry)
+          // Advance the head only once the entry is durably stored; otherwise a
+          // failed write would leave a permanent gap in the chain.
+          this.chainHeads.set(raw.run_id, id)
           this.emit('entry', entry)
           resolve(entry)
         } catch (err) {
