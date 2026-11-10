@@ -1,4 +1,4 @@
-import { appendFile, readFile } from 'fs/promises'
+import { appendFile, readFile, open } from 'fs/promises'
 import type { LedgerEntry } from '../ledger/types'
 import { computeEntryId, GENESIS_PREV_ID } from '../ledger/hash'
 
@@ -36,7 +36,7 @@ export interface ChainVerification {
 export type StorageConfig =
   | { type: 'file'; path: string }
   | { type: 's3'; bucket: string; region: string; prefix?: string }
-  | { type: 'cloud'; api_key: string; endpoint?: string }
+  | { type: 'cloud'; api_key: string; endpoint?: string; query_endpoint?: string }
   | { type: 'memory' }
 
 export function verifyChain(entries: LedgerEntry[]): ChainVerification {
@@ -132,21 +132,49 @@ export class MemoryAdapter extends StorageAdapter {
   private entries: LedgerEntry[] = []
 
   async append(entry: LedgerEntry): Promise<void> {
-    this.entries.push(entry)
+    // Store a private copy so later mutation of caller-owned payload objects
+    // can't silently rewrite history.
+    this.entries.push(structuredClone(entry))
   }
 
   async query(filter: EntryFilter): Promise<LedgerEntry[]> {
-    return applyFilter(this.entries, filter)
+    return structuredClone(applyFilter(this.entries, filter))
   }
 }
 
 export class FileAdapter extends StorageAdapter {
+  private tailChecked = false
+
   constructor(private filePath: string) {
     super()
   }
 
+  /**
+   * After a crash the last line may be a partial write with no trailing
+   * newline. Appending straight after it would corrupt the NEW entry too, so
+   * check once per adapter and start a fresh line if needed.
+   */
+  private async needsLeadingNewline(): Promise<boolean> {
+    if (this.tailChecked) return false
+    this.tailChecked = true
+    let fh
+    try {
+      fh = await open(this.filePath, 'r')
+      const { size } = await fh.stat()
+      if (size === 0) return false
+      const buf = Buffer.alloc(1)
+      await fh.read(buf, 0, 1, size - 1)
+      return buf[0] !== 0x0a
+    } catch {
+      return false // file doesn't exist yet
+    } finally {
+      await fh?.close()
+    }
+  }
+
   async append(entry: LedgerEntry): Promise<void> {
-    await appendFile(this.filePath, JSON.stringify(entry) + '\n', 'utf8')
+    const prefix = (await this.needsLeadingNewline()) ? '\n' : ''
+    await appendFile(this.filePath, prefix + JSON.stringify(entry) + '\n', 'utf8')
   }
 
   async query(filter: EntryFilter): Promise<LedgerEntry[]> {
@@ -156,45 +184,86 @@ export class FileAdapter extends StorageAdapter {
     } catch {
       return []
     }
-    const entries = raw
-      .trim()
-      .split('\n')
-      .filter(Boolean)
-      .map(l => JSON.parse(l) as LedgerEntry)
+    const entries: LedgerEntry[] = []
+    let skipped = 0
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue
+      try {
+        entries.push(JSON.parse(line) as LedgerEntry)
+      } catch {
+        // A corrupt/partial line must not take down every query. Skipping it
+        // leaves a gap that verifyChain reports as a broken link.
+        skipped++
+      }
+    }
+    if (skipped > 0) {
+      console.warn(`[AgentLedger] ${this.filePath}: skipped ${skipped} unparseable line(s)`)
+    }
     return applyFilter(entries, filter)
   }
 }
+
+const MAX_CLOUD_BUFFER = 10_000
 
 export class CloudAdapter extends StorageAdapter {
   private buffer: LedgerEntry[] = []
   private ws: WebSocket | null = null
   private endpoint: string
+  private queryEndpoint: string
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private closed = false
 
   constructor(
     private apiKey: string,
-    endpoint?: string
+    endpoint?: string,
+    queryEndpoint?: string
   ) {
     super()
     this.endpoint = endpoint ?? 'wss://ingest.agentledger.io/v1/stream'
+    this.queryEndpoint = (queryEndpoint ?? 'https://api.agentledger.io/v1/entries').replace(/\/+$/, '')
     this.connect()
   }
 
   private connect(): void {
-    if (typeof WebSocket === 'undefined') return
+    if (this.closed || typeof WebSocket === 'undefined') return
     this.ws = new WebSocket(this.endpoint, ['v1', this.apiKey])
     this.ws.onopen = () => {
       this.buffer.forEach(e => this.ws!.send(JSON.stringify(e)))
       this.buffer = []
     }
-    this.ws.onclose = () => setTimeout(() => this.connect(), 3000)
+    this.ws.onclose = () => {
+      if (this.closed) return
+      this.reconnectTimer = setTimeout(() => this.connect(), 3000)
+      // Reconnect attempts must not keep the process alive on their own.
+      if (typeof this.reconnectTimer.unref === 'function') this.reconnectTimer.unref()
+    }
+  }
+
+  /** Stop reconnecting and close the socket. */
+  close(): void {
+    this.closed = true
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer)
+    this.reconnectTimer = null
+    this.ws?.close()
+    this.ws = null
   }
 
   async append(entry: LedgerEntry): Promise<void> {
+    if (typeof WebSocket === 'undefined') {
+      // Without a WebSocket implementation nothing would ever be sent; fail
+      // loudly instead of buffering forever and reporting success.
+      throw new Error(
+        'CloudAdapter: no global WebSocket available (requires Node 22+ or a browser); cannot ship entries'
+      )
+    }
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(entry))
-    } else {
-      this.buffer.push(entry)
+      return
     }
+    if (this.buffer.length >= MAX_CLOUD_BUFFER) {
+      throw new Error(`CloudAdapter: offline buffer full (${MAX_CLOUD_BUFFER} entries)`)
+    }
+    this.buffer.push(entry)
   }
 
   async query(filter: EntryFilter): Promise<LedgerEntry[]> {
@@ -206,13 +275,19 @@ export class CloudAdapter extends StorageAdapter {
     if (filter.until !== undefined) params.set('until', String(filter.until))
     if (filter.min_risk !== undefined) params.set('min_risk', String(filter.min_risk))
     const qs = params.toString()
-    const url = `https://api.agentledger.io/v1/entries${qs ? `?${qs}` : ''}`
+    const url = `${this.queryEndpoint}${qs ? `?${qs}` : ''}`
     const res = await fetch(url, {
       headers: { Authorization: `Bearer ${this.apiKey}` },
     })
-    const remote = (await res.json()) as LedgerEntry[]
+    if (!res.ok) {
+      throw new Error(`CloudAdapter: query failed with HTTP ${res.status}`)
+    }
+    const remote = (await res.json()) as unknown
+    if (!Array.isArray(remote)) {
+      throw new Error('CloudAdapter: query returned a non-array response')
+    }
     // Defensive client-side filter in case the server doesn't honor params.
-    return applyFilter(remote, filter)
+    return applyFilter(remote as LedgerEntry[], filter)
   }
 }
 
@@ -225,7 +300,7 @@ export class LedgerStorage {
         this.adapter = new FileAdapter(config.path)
         break
       case 'cloud':
-        this.adapter = new CloudAdapter(config.api_key, config.endpoint)
+        this.adapter = new CloudAdapter(config.api_key, config.endpoint, config.query_endpoint)
         break
       case 'memory':
         this.adapter = new MemoryAdapter()
@@ -245,5 +320,9 @@ export class LedgerStorage {
   }
   verify(run_id: string) {
     return this.adapter.verify(run_id)
+  }
+  /** Release adapter resources (sockets, timers). Safe on any adapter. */
+  close() {
+    ;(this.adapter as { close?: () => void }).close?.()
   }
 }
